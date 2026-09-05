@@ -180,7 +180,7 @@ export function Timeline({ projectId, media, onReorder, onToggleFill, busy }: Ti
               onTouchMove={handleTouchMove}
               onTouchEnd={handleTouchEnd}
               aria-label={`Clip ${i + 1} di ${sorted.length}. ${isTouchDragging ? 'Riordinamento attivo' : 'Premi a lungo per riordinare su mobile'}`}
-              className={
+              className={`
                 relative w-44 shrink-0 overflow-hidden rounded-lg border bg-black
                 ${isOver ? "border-emerald-400 ring-2 ring-emerald-400/50" : "border-slate-700"}
                 ${isDragged ? "opacity-40" : ""}

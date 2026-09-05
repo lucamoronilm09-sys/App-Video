@@ -24,8 +24,11 @@ TRANS_MIN_SEC = 0.6
 TRANS_MAX_SEC = 1.0
 ZOOM_MAX = 1.15
 PAN_MAX_FRAC = 0.12
-PHOTO_MIN_SEC = 3.0
-PHOTO_MAX_SEC = 6.5
+# Limiti per l'aggiustamento delle durate foto durante il fit-audio e beat-sync.
+# Questi valori sono INTENZIONIONALMENTE diversi da PHOTO_BASE_MIN/MAX_SEC di sequence.py:
+# qui si definisce il tetto massimo raggiungibile dopo gli aggiustamenti dell'Edit Director.
+PHOTO_ADJUSTED_MIN_SEC = 3.0
+PHOTO_ADJUSTED_MAX_SEC = 6.5
 PHOTO_DEFAULT_SEC = 4.5
 BEAT_TOL_SEC = 0.8
 NUDGE_MAX_SEC = 0.4
@@ -89,13 +92,13 @@ def _nearest_marker(markers: list[float], t: float, tol: float) -> float | None:
 
 
 def _distribute_diff(durations: list[float], photo_idx: list[int], diff: float) -> list[float]:
-    """Distribuisce diff sulle foto entro [PHOTO_MIN_SEC, PHOTO_MAX_SEC] (dalle ultime)."""
+    """Distribuisce diff sulle foto entro [PHOTO_ADJUSTED_MIN_SEC, PHOTO_ADJUSTED_MAX_SEC] (dalle ultime)."""
     if not photo_idx or diff == 0:
         return durations
     share = diff / len(photo_idx)
     out = list(durations)
     for i in reversed(photo_idx):
-        out[i] = round(max(PHOTO_MIN_SEC, min(PHOTO_MAX_SEC, out[i] + share)), 2)
+        out[i] = round(max(PHOTO_ADJUSTED_MIN_SEC, min(PHOTO_ADJUSTED_MAX_SEC, out[i] + share)), 2)
     return out
 
 
@@ -134,7 +137,7 @@ async def run(project_state: dict) -> dict:
                 continue
             shift = max(-NUDGE_MAX_SEC, min(NUDGE_MAX_SEC, target - starts[i]))
             new_dur = durations[i - 1] + shift
-            if PHOTO_MIN_SEC <= new_dur <= PHOTO_MAX_SEC:
+            if PHOTO_ADJUSTED_MIN_SEC <= new_dur <= PHOTO_ADJUSTED_MAX_SEC:
                 durations[i - 1] = round(new_dur, 2)
                 starts = starts_for(durations)
 

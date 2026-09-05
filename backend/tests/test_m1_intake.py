@@ -155,3 +155,57 @@ def test_upload_video_endpoint(isolated_projects):
     assert m["width"] == 640
     assert m["height"] == 360
     assert m["duration_sec"] > 0
+
+
+def test_upload_fake_jpg_rejected(isolated_projects):
+    """Test che un file .jpg con contenuto testuale arbitrario venga rifiutato."""
+    client = TestClient(app)
+    proj = client.post("/api/projects").json()
+    pid = proj["project_id"]
+
+    # Crea un file con estensione .jpg ma contenuto testuale (non immagine reale)
+    fake_jpg_content = b"not an image"
+    files = [("files", ("fake.jpg", io.BytesIO(fake_jpg_content), "image/jpeg"))]
+    resp = client.post(f"/api/projects/{pid}/media", files=files)
+    assert resp.status_code == 400
+    assert "Contenuto file non corrisponde all'estensione" in resp.json()["detail"]
+
+
+def test_batch_with_invalid_file_writes_nothing(isolated_projects):
+    """Test che un batch con 2 file validi + 1 invalido non scriva nessun file su disco."""
+    from pathlib import Path
+    
+    client = TestClient(app)
+    proj = client.post("/api/projects").json()
+    pid = proj["project_id"]
+    
+    media_dir = isolated_projects / pid / "media"
+    
+    # Crea 2 immagini valide
+    img1_buf = io.BytesIO()
+    Image.new("RGB", (400, 600), "blue").save(img1_buf, format="JPEG")
+    img1_buf.seek(0)
+    
+    img2_buf = io.BytesIO()
+    Image.new("RGB", (800, 800), "green").save(img2_buf, format="JPEG")
+    img2_buf.seek(0)
+    
+    # Crea 1 file invalido (contenuto testuale con estensione .jpg)
+    fake_jpg_content = b"this is not a valid image file"
+    
+    # Invia batch: 2 validi + 1 invalido
+    files = [
+        ("files", ("valid1.jpg", img1_buf, "image/jpeg")),
+        ("files", ("valid2.jpg", img2_buf, "image/jpeg")),
+        ("files", ("invalid.jpg", io.BytesIO(fake_jpg_content), "image/jpeg")),
+    ]
+    
+    resp = client.post(f"/api/projects/{pid}/media", files=files)
+    
+    # Verifica che la risposta sia 4xx
+    assert resp.status_code == 400
+    assert "Contenuto file non corrisponde all'estensione" in resp.json()["detail"]
+    
+    # Verifica che NESSUN file sia stato scritto su disco
+    # (il batch deve essere atomico: o tutti passano o nessuno viene scritto)
+    assert not media_dir.exists() or list(media_dir.iterdir()) == []

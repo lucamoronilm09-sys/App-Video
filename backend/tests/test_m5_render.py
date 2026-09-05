@@ -120,3 +120,34 @@ def test_render_validates_and_download_404(isolated_projects):
     # senza render, download ancora 404
     assert client.get(f"/api/projects/{pid}/download").status_code == 404
     assert client.post("/api/projects/inesistente/render").status_code == 404
+
+
+def test_has_render_flag_in_list_projects(isolated_projects):
+    """Verifica che has_render=True dopo render completato e False prima."""
+    client = TestClient(app)
+    
+    # Progetto appena creato: ha_render=False
+    pid = client.post("/api/projects").json()["project_id"]
+    resp = client.get("/api/projects")
+    assert resp.status_code == 200
+    projects = resp.json()
+    proj_entry = next((p for p in projects if p["project_id"] == pid), None)
+    assert proj_entry is not None
+    assert proj_entry["has_render"] is False
+    
+    # Upload foto e audio, poi render
+    _upload_photo(client, pid, "a.jpg", (320, 240), "red")
+    _upload_clicks(client, pid, seconds=6.0)
+    
+    resp = client.post(f"/api/projects/{pid}/render")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["render_manifest"]["status"] == "done"
+    
+    # Dopo render completato: has_render=True
+    resp = client.get("/api/projects")
+    assert resp.status_code == 200
+    projects = resp.json()
+    proj_entry = next((p for p in projects if p["project_id"] == pid), None)
+    assert proj_entry is not None
+    assert proj_entry["has_render"] is True
