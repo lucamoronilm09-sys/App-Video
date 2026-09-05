@@ -28,7 +28,8 @@ function DurationBadge({ m }: { m: MediaItem }) {
 }
 
 /** Striscia orizzontale ordinabile: l'ordine visivo = order_index (RF2).
- * Drag&drop nativo HTML5 + frecce ◀ ▶ come fallback (mobile/tastiera). */
+ * Drag&drop nativo HTML5 + frecce ◀ ▶ come fallback (mobile/tastiera).
+ * Touch support: long-press (500ms) + swipe per riordinare su mobile. */
 export function Timeline({ projectId, media, onReorder, onToggleFill, busy }: TimelineProps) {
   const sorted = useMemo(
     () => [...media].sort((a, b) => a.order_index - b.order_index),
@@ -38,6 +39,12 @@ export function Timeline({ projectId, media, onReorder, onToggleFill, busy }: Ti
   const [overId, setOverId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const dragRef = useRef<string | null>(null);
+  
+  // Touch reordering states
+  const [touchDragId, setTouchDragId] = useState<string | null>(null);
+  const [touchDragIndex, setTouchDragIndex] = useState<number>(-1);
+  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+  const touchStartX = useRef<number>(0);
 
   if (sorted.length === 0) return null;
 
@@ -96,6 +103,48 @@ export function Timeline({ projectId, media, onReorder, onToggleFill, busy }: Ti
     dragRef.current = null;
   };
 
+  // Touch handlers for mobile-friendly reordering
+  const handleTouchStart = (e: React.TouchEvent, id: string, index: number) => {
+    longPressTimer.current = setTimeout(() => {
+      setTouchDragId(id);
+      setTouchDragIndex(index);
+      touchStartX.current = e.touches[0].clientX;
+      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(50);
+    }, 500);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!touchDragId || touchDragIndex === -1) return;
+    e.preventDefault();
+    const currentX = e.touches[0].clientX;
+    const deltaX = currentX - touchStartX.current;
+    const threshold = 80;
+    if (Math.abs(deltaX) > threshold) {
+      const direction = deltaX > 0 ? 1 : -1;
+      const newIndex = touchDragIndex + direction;
+      if (newIndex >= 0 && newIndex < sorted.length) {
+        const newClips = [...sorted];
+        [newClips[touchDragIndex], newClips[newIndex]] = [newClips[newIndex], newClips[touchDragIndex]];
+        void onReorder(newClips.map(c => c.id));
+        setTouchDragIndex(newIndex);
+        touchStartX.current = currentX;
+        if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(10);
+      }
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+    if (touchDragId !== null) {
+      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(50);
+      setTouchDragId(null);
+      setTouchDragIndex(-1);
+    }
+  };
+
   return (
     <div className="mt-8">
       <div className="mb-3 flex items-baseline justify-between">
@@ -118,20 +167,25 @@ export function Timeline({ projectId, media, onReorder, onToggleFill, busy }: Ti
         {sorted.map((m, i) => {
           const isDragged = dragId === m.id;
           const isOver = overId === m.id;
+          const isTouchDragging = touchDragId === m.id;
           return (
             <li
               key={m.id}
-              draggable={!busy}
+              draggable={!busy && !isTouchDragging}
               onDragStart={e => handleDragStart(e, m.id)}
               onDragOver={e => handleDragOver(e, m.id)}
               onDrop={e => void handleDrop(e, m.id)}
               onDragEnd={handleDragEnd}
-              aria-label={`Clip ${i + 1} di ${sorted.length}`}
-              className={`
+              onTouchStart={e => handleTouchStart(e, m.id, i)}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              aria-label={`Clip ${i + 1} di ${sorted.length}. ${isTouchDragging ? 'Riordinamento attivo' : 'Premi a lungo per riordinare su mobile'}`}
+              className={
                 relative w-44 shrink-0 overflow-hidden rounded-lg border bg-black
                 ${isOver ? "border-emerald-400 ring-2 ring-emerald-400/50" : "border-slate-700"}
                 ${isDragged ? "opacity-40" : ""}
                 ${busy ? "" : "cursor-grab active:cursor-grabbing"}
+                ${isTouchDragging ? " scale-110 shadow-2xl opacity-80 z-20 bg-gray-800" : ""}
               `}
             >
               {/* numero d'ordine */}

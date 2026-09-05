@@ -137,6 +137,30 @@ async def run(project_state: dict) -> dict:
         filters.append(s)
         seg_acc.append(s)
 
+    # --- segmenti ---
+    filters: list[str] = []
+    inputs: list[dict[str, Any]] = []
+    segments: list[dict[str, Any]] = []
+    seg_durs: list[float] = []
+
+    def _emit(s: str, seg_acc: list[str]) -> None:
+        filters.append(s)
+        seg_acc.append(s)
+
+    # edge case: EDL con 1 sola clip -> nessuna transizione, duration deve essere > 0
+    if len(edl) == 1:
+        e = edl[0]
+        m = media_by_id[e["media_id"]]
+        path = m["path"]
+        if not Path(path).is_file():
+            raise ValueError(f"file media mancante su disco: {path}")
+        # warning se solo video senza audio utente
+        audio_path_check = (project_state.get("audio") or {}).get("path")
+        if m["type"] == "video" and not audio_path_check:
+            project_state.setdefault("warnings", []).append(
+                {"stage": "compile", "message": f"singola clip video {m['id']} senza traccia audio: sara' muta"}
+            )
+
     for i, e in enumerate(edl):
         m = media_by_id[e["media_id"]]
         path = m["path"]
@@ -231,6 +255,9 @@ async def run(project_state: dict) -> dict:
         acc += seg_durs[k]
         trans_sum += d
     total = round(acc - trans_sum, 3)
+    # edge case: durata totale <= 0 (transizioni troppo grandi o durate nulle)
+    if total <= 0:
+        raise ValueError(f"durata totale del video <= 0s: verificare durate clip e transizioni")
     filters.append(f"[{prev_label}]format=yuv420p[vout]")
 
     # coerenza col totale creativo (± quantizzazione frame sulle foto)
@@ -253,6 +280,19 @@ async def run(project_state: dict) -> dict:
             f"afade=t=in:d=0.5,afade=t=out:st={round(total - 1.0, 3)}:d=1[aout]"
         )
         audio_block = {"input_index": a_idx, "path": audio_path}
+    else:
+        # edge case: tutti video senza audio utente -> warning (sara' muto)
+        all_videos = all(media_by_id[e["media_id"]]["type"] == "video" for e in edl)
+        if all_videos:
+            project_state.setdefault("warnings", []).append(
+                {"stage": "compile", "message": "tutti video senza audio utente: il video sara' muto"}
+            )
+        # edge case: tutte foto senza audio -> warning (sara' muto)
+        all_photos = all(media_by_id[e["media_id"]]["type"] == "photo" for e in edl)
+        if all_photos:
+            project_state.setdefault("warnings", []).append(
+                {"stage": "compile", "message": "tutte foto senza audio utente: il video sara' muto"}
+            )
 
     script = ";\n".join(filters)
     out_path = str(state_store.output_dir(project_state["project_id"]) / "final.mp4")

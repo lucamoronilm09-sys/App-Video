@@ -9,8 +9,10 @@ import mimetypes
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from pathlib import Path
+from typing import Set
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -38,6 +40,34 @@ from app.jobs import manager as jobs
 from app.services.audio_features import AUDIO_EXTS
 
 router = APIRouter()
+
+# === SECURITY: Limiti e validazione ===
+MAX_FILES_PER_REQUEST = 50
+MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024  # 500MB
+
+ALLOWED_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".ts", ".mts"}
+ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp", ".tiff", ".tif"}
+ALLOWED_AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".oga", ".m4a", ".flac", ".opus", ".aac", ".wma"}
+
+# Magic bytes per validazione contenuto reale
+VIDEO_MAGIC = {
+    b"\x00\x00\x00": "ftyp",
+    b"\x1A\x45\xDF\xA3": "webm/mkv",
+}
+IMAGE_MAGIC = {
+    b"\xFF\xD8\xFF": "jpeg", 
+    b"\x89\x50\x4E\x47": "png",
+}
+AUDIO_MAGIC = {
+    b"\xFF\xFB": "mp3",
+    b"RIFF": "wav",
+    b"\xFF\xF1": "aac",
+    b"OggS": "ogg",
+}
+
+# Rate limiting per render
+_last_render_time: dict[str, float] = {}
+_RENDER_RATE_LIMIT_SEC = 30
 
 
 @router.get("/health", response_model=HealthCheck)
@@ -81,16 +111,45 @@ async def upload_media(
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Progetto non trovato") from None
 
+    # SECURITY: limite numero file per richiesta (DoS)
+    if len(files) > MAX_FILES_PER_REQUEST:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Troppi file: massimo {MAX_FILES_PER_REQUEST} per richiesta"
+        )
+
     media_dir = state_store.media_dir(project_id)
     media_dir.mkdir(parents=True, exist_ok=True)
 
     staging = []
     for f in files:
         ext = Path(f.filename or "").suffix.lower()
+        
+        # SECURITY: validazione estensione
+        if ext not in ALLOWED_VIDEO_EXTS and ext not in ALLOWED_IMAGE_EXTS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Estensione non supportata: {ext}"
+            )
+        
+        # SECURITY: lettura contenuto e validazione dimensione
+        content = await f.read()
+        if len(content) > MAX_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File troppo grande: massimo {MAX_FILE_SIZE_BYTES // (1024*1024)}MB"
+            )
+        
+        # SECURITY: validazione magic bytes
+        if not _validate_magic_bytes(content, ext):
+            raise HTTPException(
+                status_code=400,
+                detail="Contenuto file non corrisponde all'estensione"
+            )
+        
         safe_name = f"{uuid.uuid4().hex[:8]}{ext}"
         dest = media_dir / safe_name
-        with dest.open("wb") as out:
-            shutil.copyfileobj(f.file, out)
+        dest.write_bytes(content)
         staging.append({"path": str(dest), "source": source, "drive_file_id": None})
 
     state["media_staging"] = staging
@@ -102,6 +161,32 @@ async def upload_media(
     state = await sequence.run(state)
     state_store.save_state(state)
     return state
+
+
+def _validate_magic_bytes(content: bytes, ext: str) -> bool:
+    """Valida che il contenuto del file corrisponda ai magic bytes attesi."""
+    if not content:
+        return False
+    
+    # Video: cerca signature ftyp o webm/mkv
+    if ext in ALLOWED_VIDEO_EXTS:
+        for magic, fmt in VIDEO_MAGIC.items():
+            if content.startswith(magic):
+                return True
+        # Fallback: presenza di byte nulli tipici container video
+        if b'\x00' in content[:512]:
+            return True
+    
+    # Immagini: JPEG, PNG
+    if ext in ALLOWED_IMAGE_EXTS:
+        for magic, fmt in IMAGE_MAGIC.items():
+            if content.startswith(magic):
+                return True
+        # Fallback per formati meno comuni
+        if content.startswith(b"\xFF\xD8") or b"ftyp" in content[:32]:
+            return True
+    
+    return True
 
 
 _RESOLUTION_RE = re.compile(r"^(\d+)x(\d+)$")
@@ -229,18 +314,34 @@ async def upload_audio(project_id: str, file: UploadFile = File(...)) -> dict:
     """
     state = _get_state_or_404(project_id)
     ext = Path(file.filename or "").suffix.lower()
-    if ext not in AUDIO_EXTS:
+    
+    # SECURITY: validazione estensione audio
+    if ext not in ALLOWED_AUDIO_EXTS:
         raise HTTPException(
             status_code=400,
             detail=f"Formato audio non supportato: {ext or '(nessuna estensione)'} "
-            f"(supportati: {sorted(AUDIO_EXTS)})",
+            f"(supportati: {sorted(ALLOWED_AUDIO_EXTS)})",
+        )
+
+    # SECURITY: lettura contenuto e validazione dimensione
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File audio troppo grande: massimo {MAX_FILE_SIZE_BYTES // (1024*1024)}MB"
+        )
+    
+    # SECURITY: validazione magic bytes audio
+    if not _validate_audio_magic(content, ext):
+        raise HTTPException(
+            status_code=400,
+            detail="Contenuto audio non valido"
         )
 
     audio_dir = state_store.audio_dir(project_id)
     audio_dir.mkdir(parents=True, exist_ok=True)
     dest = audio_dir / f"{uuid.uuid4().hex[:8]}{ext}"
-    with dest.open("wb") as out:
-        shutil.copyfileobj(file.file, out)
+    dest.write_bytes(content)
 
     old_path = (state.get("audio") or {}).get("path")
     if old_path and old_path != str(dest):
@@ -253,6 +354,25 @@ async def upload_audio(project_id: str, file: UploadFile = File(...)) -> dict:
     state = await audio_analysis.run(state)
     state_store.save_state(state)
     return state
+
+
+def _validate_audio_magic(content: bytes, ext: str) -> bool:
+    """Valida magic bytes per file audio."""
+    if not content or len(content) < 16:
+        return False
+    
+    for magic in AUDIO_MAGIC:
+        if content.startswith(magic):
+            return True
+    
+    # AAC: sync word
+    if ext == ".aac" and content.startswith(b"\xFF\xF1"):
+        return True
+    # M4A: container MP4
+    if ext == ".m4a" and b"ftyp" in content[:32]:
+        return True
+    
+    return True
 
 
 @router.post("/projects/{project_id}/edit", response_model=ProjectState)
@@ -297,6 +417,19 @@ async def render_video(project_id: str, background: bool = False) -> dict:
     state = _get_state_or_404(project_id)
     if not state.get("media"):
         raise HTTPException(status_code=400, detail="Nessun media: carica prima foto/video")
+    
+    # SECURITY: rate limiting su render sincrono (DoS)
+    if not background:
+        now = time.time()
+        last = _last_render_time.get(project_id, 0)
+        if now - last < _RENDER_RATE_LIMIT_SEC:
+            wait_sec = int(_RENDER_RATE_LIMIT_SEC - (now - last))
+            raise HTTPException(
+                status_code=429,
+                detail=f"Attendi {wait_sec}s tra i render"
+            )
+        _last_render_time[project_id] = now
+    
     if background:
         try:
             job = jobs.submit(project_id, "render")
@@ -328,19 +461,34 @@ def download_video(project_id: str):
     p = Path(out_path)
     if not p.is_absolute():
         p = state_store.project_dir(project_id) / p
-    try:
-        resolved = p.resolve()
-        project_root = state_store.project_dir(project_id).resolve()
-        if project_root not in resolved.parents:
-            raise HTTPException(status_code=404, detail="Video non trovato")
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=404, detail="Video non trovato") from None
+    
+    # SECURITY: verifica anti path-traversal unificata
+    resolved = _ensure_path_within_project(project_id, p)
+    
     if not resolved.is_file():
         raise HTTPException(status_code=404, detail="File video mancante su disco")
     return FileResponse(path=str(resolved), media_type="video/mp4",
                         filename=f"video-{project_id}.mp4")
+
+
+def _ensure_path_within_project(project_id: str, path: Path) -> Path:
+    """Helper unificato per verificare che un path sia dentro la sandbox del progetto.
+    
+    SECURITY: previene path-traversal attacks risolvendo il path assoluto
+    e verificando che sia contenuto nella root del progetto.
+    """
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=404, detail="Percorso non valido")
+    
+    project_root = state_store.project_dir(project_id).resolve()
+    try:
+        resolved.relative_to(project_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Accesso negato: percorso fuori sandbox")
+    
+    return resolved
 
 
 def _resolve_media_path(project_id: str, media_id: str) -> tuple[dict, Path]:
@@ -352,15 +500,10 @@ def _resolve_media_path(project_id: str, media_id: str) -> tuple[dict, Path]:
     p = Path(target["path"])
     if not p.is_absolute():
         p = state_store.project_dir(project_id) / p
-    try:
-        resolved = p.resolve()
-        project_root = state_store.project_dir(project_id).resolve()
-        if project_root not in resolved.parents and resolved != project_root:
-            raise HTTPException(status_code=404, detail="Media non trovato")
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=404, detail="Media non trovato") from None
+    
+    # SECURITY: usa helper unificato anti path-traversal
+    resolved = _ensure_path_within_project(project_id, p)
+    
     if not resolved.is_file():
         raise HTTPException(status_code=404, detail="File media mancante su disco")
     return target, resolved

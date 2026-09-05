@@ -146,7 +146,7 @@ async def run(project_state: dict) -> dict:
         ("duration", "timeline_compiler", check_duration(info, float(manifest.get("total_sec", 0)))),
         ("av_sync", "timeline_compiler", check_sync(info, manifest.get("audio") is not None)),
         ("verticals", "timeline_compiler", check_verticals(manifest, project_state)),
-        ("transitions", "edit_director", check_transitions(manifest, project_state)),
+        ("transitions", "timeline_compiler", check_transitions(manifest, project_state)),
     ]
     checks, issues = [], []
     for name, route_to, (passed, detail) in results:

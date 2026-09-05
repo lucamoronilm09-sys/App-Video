@@ -1,18 +1,46 @@
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-.pytest_cache/
-
-# Node / Next.js
+```
+# Dependencies
 node_modules/
-.next/
-out/
-*.tsbuildinfo
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+ENV/
+.venv/
+.env
+.env.local
+.env.*
+.envrc
 
-# Dati di runtime del progetto
-data/
+# Build artifacts
+dist/
+build/
+*.egg-info/
+.eggs/
+target/
+
+# Logs
+*.log
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
 
 # OS
-Thumbs.db
 .DS_Store
+Thumbs.db
+
+# Package lock
+package-lock.json
+```

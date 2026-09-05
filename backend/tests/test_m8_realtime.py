@@ -62,11 +62,17 @@ async def test_watch_project_emits_on_change(isolated_projects):
 def test_clear_errors(isolated_projects):
     client = TestClient(app)
     pid = client.post("/api/projects").json()["project_id"]
-    # upload non supportato -> errore non bloccante registrato
-    r = client.post(f"/api/projects/{pid}/media",
-                    files=[("files", ("note.txt", io.BytesIO(b"ciao"), "text/plain"))])
-    assert r.status_code == 200
+    
+    # Simula un errore non bloccante manualmente (es. warning intake)
+    st = state_store.load_state(pid)
+    st["errors"] = [{"stage": "intake", "message": "File parziale o corrotto"}]
+    state_store.save_state(st)
+    
+    # Verifica che l'errore sia presente
+    r = client.get(f"/api/projects/{pid}")
     assert len(r.json()["errors"]) == 1
+    
+    # Clear errors endpoint
     cleared = client.post(f"/api/projects/{pid}/errors/clear")
     assert cleared.status_code == 200
     assert cleared.json()["errors"] == []
