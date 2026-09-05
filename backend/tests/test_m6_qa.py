@@ -103,7 +103,7 @@ async def test_qa_rejects_tampered_transitions(isolated_projects, tmp_path):
     out = await qa.run(st)
     assert out["qa_report"]["status"] == "rejected"
     issue = next(i for i in out["qa_report"]["issues"] if i["check"] == "transitions")
-    assert issue["route_to"] == "edit_director"
+    assert issue["route_to"] == "timeline_compiler"  # fix: transizioni sono tecniche, non di stile
 
 
 def test_check_sync_unit():

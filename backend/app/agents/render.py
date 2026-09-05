@@ -61,13 +61,15 @@ def _run_ffmpeg_progress(args: list[str], total_sec: float,
         while proc.poll() is None:
             if time.time() - start > RENDER_TIMEOUT_SEC:
                 proc.kill()
+                proc.wait()  # attendi cleanup per evitare zombie
                 raise subprocess.TimeoutExpired(pargs, RENDER_TIMEOUT_SEC)
             frac = _read_fraction(pf, total_sec)
             if frac is not None:
                 prog.set(job_id, frac, "rendering ffmpeg")
             time.sleep(0.5)
     try:
-        tail = ef.read_text(encoding="utf-8", errors="ignore")[-2000:]
+        # leggi tutto lo stderr (no truncation per non perdere errori critici)
+        tail = ef.read_text(encoding="utf-8", errors="ignore")
     finally:
         for f in (pf, ef):
             try:
@@ -100,7 +102,8 @@ async def run(project_state: dict) -> dict:
         raise RuntimeError(msg) from exc
 
     if proc.returncode != 0:
-        tail = (proc.stderr or "")[-2000:].strip()
+        # stderr gia' completo (no truncation in _run_ffmpeg_progress)
+        tail = (proc.stderr or "").strip()
         msg = f"ffmpeg exit={proc.returncode}: {tail}"
         project_state.setdefault("errors", []).append({"stage": "render", "message": msg})
         raise RuntimeError(msg)

@@ -208,6 +208,17 @@ Pipeline: upload locale / Drive → Intake → Normalizer → Sequence ‖ Audio
 
 ## Polish post-M8 ✅
 
+- **M8** — Avanzamento pipeline in tempo reale, gestione errori, preview video nel browser
+- **Security hardening (routes.py)**:
+  - `MAX_FILES_PER_REQUEST=50`, `MAX_FILE_SIZE_BYTES=500MB` → mitigazione DoS/OOM
+  - Validazione magic bytes per video/immagini/audio (non solo estensione) → previene upload eseguibili/XSS
+  - Helper `_ensure_path_within_project()` unificato per download/media/thumb → anti path-traversal coerente
+  - Rate limiting su render sincrono (30s tra richieste) → previene abuso FFmpeg
+
+---
+
+## Stato finale — tutte le milestone M0–M8 completate + security patch
+
 **Cosa funziona (verificato test + build):**
 - **Thumbnail leggere** `GET /media/{id}/thumb` (JPEG con cache su disco, foto via Pillow / video via ffmpeg, `?w=` 64–960): la timeline non scarica più gli originali; video con badge 🎬 sul fotogramma.
 - **Fix EXIF**: l'Intake legge l'orientamento vero delle foto telefono (una 640×480 con EXIF-6 è portrait 480×640, non landscape).
