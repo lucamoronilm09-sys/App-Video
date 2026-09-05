@@ -21,7 +21,5 @@ DEFAULT_OUTPUT_SPEC: dict = {
 }
 DEFAULT_STYLE_PROFILE = "album_memory"
 
-# Permettiamo di correggere il PATH utente se node/ffmpeg sono portabili
-# (installati in C:\Users\Marco\Tools). L'agente Render/Timeline li usera'
-# da M4 in poi; qui serve solo che il PATH includa la cartella Tools.
-TOOLS_DIR = Path.home() / "Tools"
+# NOTA: TOOLS_DIR è stato rimosso in quanto non utilizzato.
+# Gli agenti Render/Timeline invocano ffmpeg/ffprobe assumendo che siano nel PATH di sistema.

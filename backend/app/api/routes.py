@@ -118,10 +118,11 @@ async def upload_media(
             detail=f"Troppi file: massimo {MAX_FILES_PER_REQUEST} per richiesta"
         )
 
-    media_dir = state_store.media_dir(project_id)
-    media_dir.mkdir(parents=True, exist_ok=True)
-
-    staging = []
+    # APPROCCIO A: due pass - prima validazione pura (nessuna scrittura),
+    # poi scrittura solo se tutti i file sono validi
+    validated_files: list[tuple[str, bytes, str]] = []  # (safe_name, content, ext)
+    
+    # Prima pass: validazione estensione/size/magic-bytes per tutti i file
     for f in files:
         ext = Path(f.filename or "").suffix.lower()
         
@@ -148,6 +149,15 @@ async def upload_media(
             )
         
         safe_name = f"{uuid.uuid4().hex[:8]}{ext}"
+        validated_files.append((safe_name, content, ext))
+    
+    # Seconda pass: scrittura su disco e popolamento staging
+    # (eseguita solo se tutti i file hanno passato la validazione)
+    media_dir = state_store.media_dir(project_id)
+    media_dir.mkdir(parents=True, exist_ok=True)
+    
+    staging = []
+    for safe_name, content, ext in validated_files:
         dest = media_dir / safe_name
         dest.write_bytes(content)
         staging.append({"path": str(dest), "source": source, "drive_file_id": None})
@@ -186,7 +196,7 @@ def _validate_magic_bytes(content: bytes, ext: str) -> bool:
         if content.startswith(b"\xFF\xD8") or b"ftyp" in content[:32]:
             return True
     
-    return True
+    return False
 
 
 _RESOLUTION_RE = re.compile(r"^(\d+)x(\d+)$")
@@ -372,7 +382,7 @@ def _validate_audio_magic(content: bytes, ext: str) -> bool:
     if ext == ".m4a" and b"ftyp" in content[:32]:
         return True
     
-    return True
+    return False
 
 
 @router.post("/projects/{project_id}/edit", response_model=ProjectState)

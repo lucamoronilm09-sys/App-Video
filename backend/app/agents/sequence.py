@@ -15,8 +15,10 @@ import hashlib
 import random
 from typing import Any
 
-PHOTO_MIN_SEC = 3.5
-PHOTO_MAX_SEC = 5.5
+# Durata "naturale" di base assegnata a ogni foto dal Sequence Agent
+# (prima di qualsiasi aggiustamento per beat-sync o fit-audio).
+PHOTO_BASE_MIN_SEC = 3.5
+PHOTO_BASE_MAX_SEC = 5.5
 MAX_VIDEO_SEC = 8.0
 
 
@@ -24,7 +26,7 @@ def photo_duration(media_id: str) -> float:
     """Durata deterministica in [3.5, 5.5]s dall'hash dell'id (2 decimali)."""
     seed = hashlib.sha256(media_id.encode("utf-8")).digest()
     rng = random.Random(seed)
-    return round(rng.uniform(PHOTO_MIN_SEC, PHOTO_MAX_SEC), 2)
+    return round(rng.uniform(PHOTO_BASE_MIN_SEC, PHOTO_BASE_MAX_SEC), 2)
 
 
 async def run(project_state: dict) -> dict:

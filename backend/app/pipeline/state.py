@@ -117,7 +117,7 @@ def list_projects() -> list[dict[str, Any]]:
                 "project_id": st.get("project_id"),
                 "media_count": len(st.get("media", [])),
                 "has_audio": bool((st.get("audio") or {}).get("path")),
-                "has_render": bool(manifest.get("output_path")),
+                "has_render": manifest.get("status") == "done",
                 "updated_at": st.get("updated_at"),
             }
         )
