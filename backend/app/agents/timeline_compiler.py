@@ -1,0 +1,282 @@
+"""Agente 4: Timeline Compiler (architettura sez. 5) — puramente tecnico.
+
+Traduce la edit_decision_list in un render_manifest eseguibile (filtergraph
+FFmpeg reale + argv pronto): foto via zoompan (Ken Burns), video con trim,
+verticali in contain centrato su sfondo blur scurito (mai croppati),
+orizzontali in cover, transizioni xfade, traccia audio utente a misura.
+Non prende decisioni di stile: valida solo i vincoli (zoom <= 1.15,
+pan <= 12%, crossfade 0.6-1.0s, coerenza durate) e solleva ValueError preciso
+in caso di EDL incoerente (la correzione spetta agli agenti a monte).
+EDL vuota -> no-op (niente da compilare, es. progetto senza media).
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from app.pipeline import state as state_store
+
+TRANS_MIN_SEC = 0.6
+TRANS_MAX_SEC = 1.0
+ZOOM_MAX = 1.15
+PAN_MAX_FRAC = 0.12
+MANIFEST_VERSION = 1
+VCODEC_MAP = {"h264": "libx264", "h265": "libx265"}
+
+
+def _even(x: int) -> int:
+    return x if x % 2 == 0 else x + 1
+
+
+def _parse_resolution(spec: dict) -> tuple[int, int]:
+    try:
+        w, h = spec.get("resolution", "1920x1080").split("x")
+        return int(w), int(h)
+    except Exception as exc:
+        raise ValueError(f"output_spec.resolution non valida: {spec.get('resolution')}") from exc
+
+
+def _validate_ken_burns(kb: dict[str, Any], is_photo: bool) -> None:
+    if not is_photo:
+        if kb is not None:
+            raise ValueError("ken_burns assegnato a un video (vietato: RF9)")
+        return
+    if not isinstance(kb, dict):
+        raise ValueError("ken_burns mancante per una foto")
+    for key in ("zoom_from", "zoom_to", "pan_x_from", "pan_x_to", "pan_y_from", "pan_y_to"):
+        if key not in kb:
+            raise ValueError(f"ken_burns incompleto: manca {key}")
+    zf, zt = float(kb["zoom_from"]), float(kb["zoom_to"])
+    if not (1.0 <= zf <= ZOOM_MAX and 1.0 <= zt <= ZOOM_MAX):
+        raise ValueError(f"zoom fuori vincolo [1.0, {ZOOM_MAX}]: {zf}->{zt}")
+    for ax in ("pan_x", "pan_y"):
+        f, t = float(kb[f"{ax}_from"]), float(kb[f"{ax}_to"])
+        if not (0.0 <= f <= 1.0 and 0.0 <= t <= 1.0):
+            raise ValueError(f"{ax} fuori [0, 1]: {f}->{t}")
+    shift = (1.0 - 1.0 / max(zf, zt)) * max(
+        abs(float(kb["pan_x_to"]) - float(kb["pan_x_from"])),
+        abs(float(kb["pan_y_to"]) - float(kb["pan_y_from"])),
+    )
+    if shift > PAN_MAX_FRAC + 1e-9:
+        raise ValueError(f"pan oltre il 12% del frame: {shift:.3f}")
+
+
+def _ramp(zf: float, zt: float, frames: int) -> str:
+    if frames <= 1 or zf == zt:
+        return f"{zf}"
+    return f"{zf}+({zt}-{zf})*on/{frames - 1}"
+
+
+def _axis_expr(f: float, t: float, frames: int) -> str:
+    if f == 0.5 and t == 0.5:
+        return "iw/2-(iw/zoom/2)"
+    if f == t:
+        return f"(iw-iw/zoom)*{f}"
+    span = f"(iw-iw/zoom)*({f}+({t}-{f})*on/{frames - 1})" if frames > 1 else f"(iw-iw/zoom)*{t}"
+    return span
+
+
+def _zoompan(kb: dict[str, Any], frames: int, out_w: int, out_h: int, fps: int) -> str:
+    zf, zt = float(kb["zoom_from"]), float(kb["zoom_to"])
+    z = _ramp(zf, zt, frames)
+    x = _axis_expr(float(kb["pan_x_from"]), float(kb["pan_x_to"]), frames)
+    y = _axis_expr(float(kb["pan_y_from"]), float(kb["pan_y_to"]), frames)
+    return f"zoompan=z='{z}':x='{x}':y='{y}':d={frames}:s={out_w}x{out_h}:fps={fps}"
+
+
+def _tail(fps: int) -> str:
+    return f"fps={fps},format=yuv420p,setsar=1,settb=AVTB"
+
+
+async def run(project_state: dict) -> dict:
+    edl: list[dict[str, Any]] = project_state.get("edit_decision_list", [])
+    if not edl:
+        return project_state  # niente da compilare
+    state_store.ensure_project_dirs(project_state["project_id"])
+
+    media_by_id = {m["id"]: m for m in project_state.get("media", [])}
+    W, H = _parse_resolution(project_state.get("output_spec", {}))
+    fps = int(project_state.get("output_spec", {}).get("fps", 30))
+    vcodec = project_state.get("output_spec", {}).get("vcodec", "h264")
+    if vcodec not in VCODEC_MAP:
+        raise ValueError(f"vcodec non supportato: {vcodec} (h264|h265)")
+    venc = VCODEC_MAP[vcodec]
+    W2, H2 = 2 * W, 2 * H
+
+    # --- validazione EDL ---
+    for e in edl:
+        mid = e.get("media_id")
+        if mid not in media_by_id:
+            raise ValueError(f"EDL fa riferimento a media inesistente: {mid}")
+        for key in ("start_sec_in_final_video", "duration_sec", "transition_in", "transition_out"):
+            if key not in e:
+                raise ValueError(f"voce EDL {mid} incompleta: manca {key}")
+        if float(e["duration_sec"]) <= 0:
+            raise ValueError(f"durata non positiva per {mid}")
+        for tk in ("transition_in", "transition_out"):
+            t = float(e[tk])
+            if t != 0.0 and not (TRANS_MIN_SEC <= t <= TRANS_MAX_SEC):
+                raise ValueError(f"transizione fuori [0.6, 1.0]s per {mid}: {t}")
+        _validate_ken_burns(e.get("ken_burns"), media_by_id[mid].get("type") == "photo")
+    if float(edl[0]["transition_in"]) != 0.0 or float(edl[-1]["transition_out"]) != 0.0:
+        raise ValueError("prima clip con transition_in o ultima con transition_out (devono essere 0)")
+    for a, b in zip(edl, edl[1:]):
+        if float(a["transition_out"]) != float(b["transition_in"]):
+            raise ValueError(f"transizione incoerente tra {a['media_id']} e {b['media_id']}")
+        d = float(a["transition_out"])
+        if d >= min(float(a["duration_sec"]), float(b["duration_sec"])) - 0.05:
+            raise ValueError(f"crossfade {d}s piu' lungo delle clip adiacenti")
+
+    # --- segmenti ---
+    filters: list[str] = []
+    inputs: list[dict[str, Any]] = []
+    segments: list[dict[str, Any]] = []
+    seg_durs: list[float] = []
+
+    def _emit(s: str, seg_acc: list[str]) -> None:
+        filters.append(s)
+        seg_acc.append(s)
+
+    for i, e in enumerate(edl):
+        m = media_by_id[e["media_id"]]
+        path = m["path"]
+        if not Path(path).is_file():
+            raise ValueError(f"file media mancante su disco: {path}")
+        kind = m["type"]
+        D = float(e["duration_sec"])
+        orient = m.get("orientation") or ("portrait" if m.get("height", 0) > m.get("width", 0) else "landscape")
+        portrait = orient == "portrait"
+        inputs.append({"index": i, "path": path, "kind": kind})
+        seg_acc: list[str] = []
+
+        if kind == "photo":
+            frames = max(2, round(D * fps))
+            seg_durs.append(frames / fps)
+            if portrait:
+                fw = _even(round(H2 * m["width"] / m["height"]))
+                _emit(f"[{i}:v]split=2[ibg{i}][ifg{i}]", seg_acc)
+                _emit(
+                    f"[ibg{i}]scale={W}:{H}:force_original_aspect_ratio=increase,"
+                    f"crop={W}:{H},gblur=sigma=40,eq=brightness=-0.25,setsar=1,"
+                    f"loop=loop=-1:size=1,trim=end_frame={frames},"
+                    # il loop eredita i timestamp del demuxer (25fps): rigenerali
+                    # esatti a fps costanti, altrimenti l'overlay si allunga
+                    f"setpts=N/{fps}/TB,fps={fps}[vbg{i}]",
+                    seg_acc,
+                )
+                _emit(
+                    f"[ifg{i}]scale={fw}:{H2},{_zoompan(e['ken_burns'], frames, fw, H2, fps)},"
+                    f"setpts=PTS-STARTPTS[vfg{i}]",
+                    seg_acc,
+                )
+                _emit(
+                    f"[vbg{i}][vfg{i}]overlay=(W-w)/2:(H-h)/2:format=yuv420:eof_action=pass,"
+                    f"{_tail(fps)}[v{i}]",
+                    seg_acc,
+                )
+            else:
+                _emit(
+                    f"[{i}:v]scale={W2}:{H2}:force_original_aspect_ratio=increase,"
+                    f"crop={W2}:{H2},{_zoompan(e['ken_burns'], frames, W2, H2, fps)},"
+                    f"scale={W}:{H},{_tail(fps)}[v{i}]",
+                    seg_acc,
+                )
+        else:  # video: trim (se previsto), cover/contain, MAI zoompan
+            ts, te = m.get("trim_start_sec"), m.get("trim_end_sec")
+            if ts is not None and te is not None:
+                if abs((float(te) - float(ts)) - D) > 0.05:
+                    raise ValueError(f"durata EDL incoerente col trim per {m['id']}")
+                trim = f"trim=start={float(ts)}:end={float(te)},setpts=PTS-STARTPTS,"
+            else:
+                trim = ""
+            seg_durs.append(D)
+            if portrait:
+                _emit(f"[{i}:v]{trim}split=2[vibg{i}][vifg{i}]", seg_acc)
+                _emit(
+                    f"[vibg{i}]scale={W}:{H}:force_original_aspect_ratio=increase,"
+                    f"crop={W}:{H},gblur=sigma=40,eq=brightness=-0.25[vbg{i}]",
+                    seg_acc,
+                )
+                _emit(f"[vifg{i}]scale=-2:{H}[vfg{i}]", seg_acc)
+                _emit(
+                    f"[vbg{i}][vfg{i}]overlay=(W-w)/2:(H-h)/2:format=yuv420:eof_action=pass,"
+                    f"{_tail(fps)}[v{i}]",
+                    seg_acc,
+                )
+            else:
+                _emit(
+                    f"[{i}:v]{trim}scale={W}:{H}:force_original_aspect_ratio=increase,"
+                    f"crop={W}:{H},{_tail(fps)}[v{i}]",
+                    seg_acc,
+                )
+        segments.append({"media_id": e["media_id"], "input_index": i, "kind": kind,
+                         "fit": "contain" if portrait else "cover",
+                         "filter": " | ".join(seg_acc),
+                         "label": f"v{i}", "duration_sec": round(seg_durs[-1], 3)})
+
+    # --- transizioni xfade ---
+    transitions: list[dict[str, Any]] = []
+    prev_label = "v0"
+    acc = seg_durs[0]
+    trans_sum = 0.0
+    for k in range(1, len(edl)):
+        d = round(float(edl[k]["transition_in"]), 3)
+        offset = round(acc - d - trans_sum, 3)
+        filters.append(
+            f"[{prev_label}][v{k}]xfade=transition=fade:duration={d}:offset={offset}[x{k}]"
+        )
+        transitions.append({"index": k, "from_segment": k - 1, "to_segment": k,
+                            "duration_sec": d, "offset_sec": offset})
+        prev_label = f"x{k}"
+        acc += seg_durs[k]
+        trans_sum += d
+    total = round(acc - trans_sum, 3)
+    filters.append(f"[{prev_label}]format=yuv420p[vout]")
+
+    # coerenza col totale creativo (± quantizzazione frame sulle foto)
+    creative = round(sum(float(e["duration_sec"]) for e in edl) - sum(float(e["transition_out"]) for e in edl[:-1]), 3)
+    n_photos = sum(1 for e in edl if media_by_id[e["media_id"]]["type"] == "photo")
+    if abs(total - creative) > n_photos * (0.5 / fps) + 0.02:
+        raise ValueError(f"totale manifest ({total}s) incoerente con EDL ({creative}s)")
+
+    # --- audio utente (solo quello: l'audio dei video e' scartato) ---
+    audio_path = (project_state.get("audio") or {}).get("path")
+    audio_block = None
+    if audio_path:
+        if not Path(audio_path).is_file():
+            raise ValueError(f"file audio mancante su disco: {audio_path}")
+        a_idx = len(inputs)
+        inputs.append({"index": a_idx, "path": audio_path, "kind": "audio"})
+        filters.append(
+            f"[{a_idx}:a]aformat=sample_rates=44100:channel_layouts=stereo,"
+            f"apad=whole_dur={total},atrim=duration={total},"
+            f"afade=t=in:d=0.5,afade=t=out:st={round(total - 1.0, 3)}:d=1[aout]"
+        )
+        audio_block = {"input_index": a_idx, "path": audio_path}
+
+    script = ";\n".join(filters)
+    out_path = str(state_store.output_dir(project_state["project_id"]) / "final.mp4")
+    args: list[str] = ["ffmpeg", "-y"]
+    for inp in inputs:
+        args += ["-i", inp["path"]]
+    args += ["-filter_complex", script, "-map", "[vout]"]
+    if audio_block:
+        args += ["-map", "[aout]", "-c:a", "aac", "-b:a", "160k"]
+    args += ["-c:v", venc, "-preset", "medium", "-crf", "20",
+             "-pix_fmt", "yuv420p", "-r", str(fps), "-movflags", "+faststart", out_path]
+
+    project_state["render_manifest"] = {
+        "version": MANIFEST_VERSION,
+        "output": {"path": out_path, "resolution": f"{W}x{H}", "fps": fps,
+                   "vcodec": vcodec,
+                   "preset": "medium", "crf": 20,
+                   "audio_codec": "aac" if audio_block else None},
+        "inputs": inputs,
+        "segments": segments,
+        "transitions": transitions,
+        "filter_complex": script,
+        "args": args,
+        "total_sec": total,
+        "audio": audio_block,
+    }
+    return project_state
