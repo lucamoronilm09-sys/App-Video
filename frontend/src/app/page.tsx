@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getHealth, createProject, listProjects, type HealthResponse, type ProjectSummary } from "@/lib/api";
+import { getHealth, createProject, listProjects, deleteProject, type HealthResponse, type ProjectSummary } from "@/lib/api";
 
 export default function Home() {
   const router = useRouter();
@@ -10,6 +10,7 @@ export default function Home() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;
@@ -37,6 +38,22 @@ export default function Home() {
       setError(err instanceof Error ? err.message : "Errore creazione progetto");
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleDelete = async (projectId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm(`Sei sicuro di voler eliminare il progetto ${projectId}?`)) {
+      return;
+    }
+    setDeleting(projectId);
+    try {
+      await deleteProject(projectId);
+      setProjects(projects.filter(p => p.project_id !== projectId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Errore eliminazione progetto");
+    } finally {
+      setDeleting(null);
     }
   };
 
@@ -99,12 +116,21 @@ export default function Home() {
                     </p>
                   </div>
                 </div>
-                <button
-                  onClick={() => router.push(`/projects/${p.project_id}`)}
-                  className="px-3 py-1 text-xs text-slate-300 hover:text-slate-100 underline"
-                >
-                  Apri
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => router.push(`/projects/${p.project_id}`)}
+                    className="px-3 py-1 text-xs text-slate-300 hover:text-slate-100 underline"
+                  >
+                    Apri
+                  </button>
+                  <button
+                    onClick={(e) => handleDelete(p.project_id, e)}
+                    disabled={deleting === p.project_id}
+                    className="px-3 py-1 text-xs text-rose-400 hover:text-rose-300 underline disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {deleting === p.project_id ? "Elimino&hellip;" : "Elimina"}
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

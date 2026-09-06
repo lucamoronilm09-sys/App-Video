@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   clearErrors,
+  deleteProject,
   getProject,
   planEdit,
   reorderMedia,
@@ -41,6 +42,7 @@ export default function ProjectPage() {
   const [audioBusy, setAudioBusy] = useState(false);
   const [editBusy, setEditBusy] = useState(false);
   const [clearBusy, setClearBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const progress = useProjectEvents(projectId);
   const lastSyncRef = useRef(0);
   const syncingRef = useRef(false);
