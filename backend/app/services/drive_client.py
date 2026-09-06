@@ -80,19 +80,26 @@ def get_authorization_url(host: str = "http://127.0.0.1:8000") -> str:
     flow = build_flow(host)
     url, state = flow.authorization_url(access_type="offline", prompt="consent")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    OAUTH_STATE_PATH.write_text(json.dumps({"state": state}), encoding="utf-8")
+    OAUTH_STATE_PATH.write_text(
+        json.dumps({"state": state, "code_verifier": flow.code_verifier}),
+        encoding="utf-8"
+    )
     return url
 
 
 def exchange_code_and_save(code: str, returned_state: str,
                            host: str = "http://127.0.0.1:8000") -> None:
     try:
-        saved = json.loads(OAUTH_STATE_PATH.read_text(encoding="utf-8")).get("state")
+        saved_data = json.loads(OAUTH_STATE_PATH.read_text(encoding="utf-8"))
     except Exception:
-        saved = None
-    if not saved or not returned_state or saved != returned_state:
+        saved_data = {}
+    saved_state = saved_data.get("state")
+    saved_verifier = saved_data.get("code_verifier")
+    if not saved_state or not returned_state or saved_state != returned_state:
         raise ValueError("state OAuth non valido (riprova la connessione)")
     flow = build_flow(host)
+    if saved_verifier:
+        flow.code_verifier = saved_verifier
     flow.fetch_token(code=code)
     TOKEN_PATH.write_text(flow.credentials.to_json(), encoding="utf-8")
     try:
