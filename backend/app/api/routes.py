@@ -654,3 +654,19 @@ def clear_errors(project_id: str) -> dict:
     state["errors"] = []
     state_store.save_state(state)
     return state
+
+
+@router.delete("/projects/{project_id}")
+def delete_project(project_id: str) -> dict:
+    """Elimina un progetto e tutti i suoi file associati."""
+    try:
+        state = state_store.load_state(project_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Progetto non trovato") from None
+    
+    # Elimina tutti i file del progetto
+    project_path = state_store.project_dir(project_id)
+    if project_path.exists():
+        shutil.rmtree(project_path)
+    
+    return {"message": "Progetto eliminato con successo", "project_id": project_id}
