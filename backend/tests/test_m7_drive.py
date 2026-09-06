@@ -49,6 +49,11 @@ class FakeFiles:
 
     def list(self, q, fields, orderBy, pageSize, pageToken=None):
         import re
+        if "sharedWithMe=true" in q:
+            # Query per "Condivisi con me": ritorna un set diverso di file
+            kids = [dict(id=c, name=self.tree[c]["name"], mimeType=self.tree[c]["mimeType"])
+                    for c in self.tree.get("shared", [])]
+            return _Req({"files": kids})
         fid = re.search(r"'([^']+)' in parents", q).group(1)
         kids = [dict(id=c, name=self.tree[c]["name"], mimeType=self.tree[c]["mimeType"])
                 for c in self.tree[fid].get("children", [])]
@@ -85,6 +90,12 @@ def _tree():
         "doc": {"id": "doc", "name": "doc.pdf", "mimeType": "application/pdf"},
         "B": {"id": "B", "name": "sotto", "mimeType": FOLDER, "children": ["m2"]},
         "m2": {"id": "m2", "name": "montagna.png", "mimeType": PNG},
+        # File condivisi con l'utente (diversi da "Il mio Drive")
+        "shared": ["sf1", "sv1", "sA"],
+        "sf1": {"id": "sf1", "name": "condiviso_foto.jpg", "mimeType": JPG},
+        "sv1": {"id": "sv1", "name": "condiviso_video.mp4", "mimeType": MP4},
+        "sA": {"id": "sA", "name": "CartellaCondivisa", "mimeType": FOLDER, "children": ["sm1"]},
+        "sm1": {"id": "sm1", "name": "nella_cartella_condivisa.png", "mimeType": PNG},
     }
 
 
@@ -157,6 +168,30 @@ def test_drive_files_listing(isolated_projects, drive_paths, monkeypatch):
     assert {e["name"] for e in sub["entries"]} == {"mare.jpg", "doc.pdf", "sotto"}
 
 
+def test_drive_files_shared_with_me(isolated_projects, drive_paths, monkeypatch):
+    """Verifica che GET /drive/files?shared=true restituisca i file condivisi."""
+    client = TestClient(app)
+    pid = client.post("/api/projects").json()["project_id"]
+    monkeypatch.setattr(dc, "get_drive_service", lambda: FakeService(_tree()))
+    
+    # Richiesta per "Condivisi con me"
+    shared_body = client.get(f"/api/projects/{pid}/drive/files", params={"shared": "true"}).json()
+    assert shared_body["current"]["id"] == "shared"
+    assert shared_body["current"]["name"] == "Condivisi con me"
+    shared_names = {e["name"] for e in shared_body["entries"]}
+    assert shared_names == {"condiviso_foto.jpg", "condiviso_video.mp4", "CartellaCondivisa"}
+    
+    # Verifica che sia diverso da "Il mio Drive"
+    normal_body = client.get(f"/api/projects/{pid}/drive/files").json()
+    normal_names = {e["name"] for e in normal_body["entries"]}
+    assert shared_names != normal_names  # I set devono essere diversi
+    
+    # Navigare dentro una cartella condivisa usa list_children normale
+    cartella_sub = client.get(f"/api/projects/{pid}/drive/files", params={"folder_id": "sA"}).json()
+    assert cartella_sub["current"]["name"] == "CartellaCondivisa"
+    assert {e["name"] for e in cartella_sub["entries"]} == {"nella_cartella_condivisa.png"}
+
+
 def test_expand_selection_unit():
     media, skipped = dc.expand_selection(FakeService(_tree()), ["v1", "t1"], ["A"])
     assert {m["id"] for m in media} == {"v1", "m1", "m2"}
@@ -207,3 +242,26 @@ def test_drive_import_validations(isolated_projects, drive_paths, monkeypatch):
     assert r.status_code == 400
     assert client.post("/api/projects/inesistente/drive/import",
                        json={"folder_ids": ["A"]}).status_code == 404
+
+
+def test_drive_import_from_shared_with_me(isolated_projects, drive_paths, monkeypatch):
+    """Verifica che l'import funzioni anche per file ottenuti da 'Condivisi con me'."""
+    client = TestClient(app)
+    pid = client.post("/api/projects").json()["project_id"]
+    monkeypatch.setattr(dc, "get_drive_service", lambda: FakeService(_tree()))
+    monkeypatch.setattr(dc, "_execute_download",
+                        _fake_download_factory({"sf1": "img", "sv1": "video", "sm1": "img"}))
+    monkeypatch.setattr(dc, "load_credentials", lambda: object())  # connesso
+    
+    # Importa un file condiviso (sf1) e una cartella condivisa (sA)
+    resp = client.post(f"/api/projects/{pid}/drive/import",
+                       json={"file_ids": ["sf1"], "folder_ids": ["sA"]})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # Dovrebbe importare sf1 + sm1 (dentro sA)
+    assert len(body["media"]) == 2
+    drive_ids = {m["drive_file_id"] for m in body["media"]}
+    assert drive_ids == {"sf1", "sm1"}
+    for m in body["media"]:
+        assert m["source"] == "google_drive"
+        assert m["width"] > 0

@@ -39,6 +39,7 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
   const [entries, setEntries] = useState<DriveEntry[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [selectedFolders, setSelectedFolders] = useState<{ id: string; name: string }[]>([]);
+  const [sharedView, setSharedView] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const importing = submitting || isJobActive(job);
@@ -58,14 +59,24 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
     };
   }, [refreshStatus]);
 
-  const loadFolder = useCallback(async (fid: string) => {
+  const loadFolder = useCallback(async (fid: string, shared = false) => {
     setBusy(true);
     setError(null);
     try {
-      const data = await driveListFiles(projectId, fid);
+      const data = await driveListFiles(projectId, fid, undefined, shared);
       setFolderId(data.current.id);
       setFolderName(data.current.name);
       setEntries(data.entries);
+      setSharedView(shared);
+      if (!shared) {
+        // Solo in modalita' normale aggiorno lo stack di navigazione
+        if (fid === "root") {
+          setStack([]);
+        }
+      } else {
+        // In vista condivisa resetto lo stack
+        setStack([]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Lettura Drive fallita");
     } finally {
@@ -129,14 +140,26 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
 
   const navigate = (id: string) => {
     setStack(prev => [...prev, { id: folderId, name: folderName }]);
-    void loadFolder(id);
+    void loadFolder(id, false);
   };
 
   const goBack = () => {
     const prev = stack[stack.length - 1];
     if (!prev) return;
     setStack(s => s.slice(0, -1));
-    void loadFolder(prev.id);
+    void loadFolder(prev.id, false);
+  };
+
+  const handleViewMode = (shared: boolean) => {
+    // Cambio tra "Il mio Drive" e "Condivisi con me"
+    setSelectedFiles([]);
+    setSelectedFolders([]);
+    setStack([]);
+    if (shared) {
+      void loadFolder("shared", true);
+    } else {
+      void loadFolder("root", false);
+    }
   };
 
   const toggleFile = (id: string) => {
@@ -229,6 +252,23 @@ export function DriveSection({ projectId, onSubmitImport, job }: DriveSectionPro
         </div>
       ) : (
         <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => handleViewMode(false)}
+              className={`rounded-lg px-3 py-1.5 text-sm font-medium ${!sharedView ? "bg-sky-600 text-white hover:bg-sky-500" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}
+            >
+              Il mio Drive
+            </button>
+            <button
+              type="button"
+              onClick={() => handleViewMode(true)}
+              className={`rounded-lg px-3 py-1.5 text-sm font-medium ${sharedView ? "bg-sky-600 text-white hover:bg-sky-500" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}
+            >
+              Condivisi con me
+            </button>
+          </div>
+
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2 text-sm">
               {stack.length > 0 && (
