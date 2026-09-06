@@ -3,6 +3,30 @@
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
+async function handleFetch<T>(url: string, options?: RequestInit): Promise<T> {
+  try {
+    const res = await fetch(url, {
+      ...options,
+      credentials: "include",
+      headers: {
+        ...(options?.headers || {}),
+      },
+    });
+    
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null);
+      throw new Error(detail?.detail ?? `HTTP ${res.status}`);
+    }
+    
+    return res.json();
+  } catch (error) {
+    if (error instanceof TypeError && error.message.includes("fetch")) {
+      throw new Error("Impossibile connettersi al server. Verifica che il backend sia in esecuzione su http://127.0.0.1:8000");
+    }
+    throw error;
+  }
+}
+
 export interface HealthResponse {
   status: string;
   service: string;
@@ -10,9 +34,7 @@ export interface HealthResponse {
 }
 
 export async function getHealth(): Promise<HealthResponse> {
-  const res = await fetch(`${API_BASE}/api/health`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  return handleFetch<HealthResponse>(`${API_BASE}/api/health`, { cache: "no-store" } as RequestInit);
 }
 
 export interface ProjectSummary {
@@ -24,15 +46,11 @@ export interface ProjectSummary {
 }
 
 export async function listProjects(): Promise<ProjectSummary[]> {
-  const res = await fetch(`${API_BASE}/api/projects`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  return handleFetch<ProjectSummary[]>(`${API_BASE}/api/projects`, { cache: "no-store" } as RequestInit);
 }
 
 export async function createProject(): Promise<{ project_id: string }> {
-  const res = await fetch(`${API_BASE}/api/projects`, { method: "POST" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  return handleFetch<{ project_id: string }>(`${API_BASE}/api/projects`, { method: "POST" } as RequestInit);
 }
 
 export interface MediaItem {
@@ -69,33 +87,24 @@ export interface ProjectState {
 export async function uploadMedia(projectId: string, files: File[]): Promise<ProjectState> {
   const formData = new FormData();
   files.forEach(f => formData.append("files", f));
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/media`, {
+  return handleFetch<ProjectState>(`${API_BASE}/api/projects/${projectId}/media`, {
     method: "POST",
     body: formData,
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  } as RequestInit);
 }
 
 export async function getProject(projectId: string): Promise<ProjectState> {
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  return handleFetch<ProjectState>(`${API_BASE}/api/projects/${projectId}`, { cache: "no-store" } as RequestInit);
 }
 
 export type BackgroundFill = "blur" | "solid_color";
 
 export async function reorderMedia(projectId: string, mediaIds: string[]): Promise<ProjectState> {
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/media/order`, {
+  return handleFetch<ProjectState>(`${API_BASE}/api/projects/${projectId}/media/order`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ media_ids: mediaIds }),
-  });
-  if (!res.ok) {
-    const detail = await res.json().catch(() => null);
-    throw new Error(detail?.detail ?? `HTTP ${res.status}`);
-  }
-  return res.json();
+  } as RequestInit);
 }
 
 export async function updateMediaFill(
@@ -103,16 +112,11 @@ export async function updateMediaFill(
   mediaId: string,
   backgroundFill: BackgroundFill,
 ): Promise<ProjectState> {
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/media/${mediaId}`, {
+  return handleFetch<ProjectState>(`${API_BASE}/api/projects/${projectId}/media/${mediaId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ background_fill: backgroundFill }),
-  });
-  if (!res.ok) {
-    const detail = await res.json().catch(() => null);
-    throw new Error(detail?.detail ?? `HTTP ${res.status}`);
-  }
-  return res.json();
+  } as RequestInit);
 }
 
 export interface SettingsPatch {
@@ -123,16 +127,11 @@ export interface SettingsPatch {
 }
 
 export async function updateSettings(projectId: string, patch: SettingsPatch): Promise<ProjectState> {
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/settings`, {
+  return handleFetch<ProjectState>(`${API_BASE}/api/projects/${projectId}/settings`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
-  });
-  if (!res.ok) {
-    const detail = await res.json().catch(() => null);
-    throw new Error(detail?.detail ?? `HTTP ${res.status}`);
-  }
-  return res.json();
+  } as RequestInit);
 }
 
 /** URL del file originale (uso raro: gli originali pesano). */
@@ -156,15 +155,10 @@ export interface AudioInfo {
 export async function uploadAudio(projectId: string, file: File): Promise<ProjectState> {
   const formData = new FormData();
   formData.append("file", file);
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/audio`, {
+  return handleFetch<ProjectState>(`${API_BASE}/api/projects/${projectId}/audio`, {
     method: "POST",
     body: formData,
-  });
-  if (!res.ok) {
-    const detail = await res.json().catch(() => null);
-    throw new Error(detail?.detail ?? `HTTP ${res.status}`);
-  }
-  return res.json();
+  } as RequestInit);
 }
 
 export interface KenBurns {
@@ -216,21 +210,11 @@ export interface RenderManifest {
 }
 
 export async function planEdit(projectId: string): Promise<ProjectState> {
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/edit`, { method: "POST" });
-  if (!res.ok) {
-    const detail = await res.json().catch(() => null);
-    throw new Error(detail?.detail ?? `HTTP ${res.status}`);
-  }
-  return res.json();
+  return handleFetch<ProjectState>(`${API_BASE}/api/projects/${projectId}/edit`, { method: "POST" } as RequestInit);
 }
 
 export async function renderVideo(projectId: string): Promise<ProjectState> {
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/render`, { method: "POST" });
-  if (!res.ok) {
-    const detail = await res.json().catch(() => null);
-    throw new Error(detail?.detail ?? `HTTP ${res.status}`);
-  }
-  return res.json();
+  return handleFetch<ProjectState>(`${API_BASE}/api/projects/${projectId}/render`, { method: "POST" } as RequestInit);
 }
 
 /** URL diretto all'mp4 finale (anteprima <video> e download). */
@@ -257,35 +241,25 @@ export interface DriveFolder {
   nextPageToken: string | null;
 }
 
-async function driveErr(res: Response): Promise<Error> {
-  const detail = await res.json().catch(() => null);
-  return new Error(detail?.detail ?? `HTTP ${res.status}`);
-}
-
 export async function driveStatus(): Promise<DriveStatus> {
-  const res = await fetch(`${API_BASE}/api/drive/status`, { cache: "no-store" });
-  if (!res.ok) throw await driveErr(res);
-  return res.json();
+  return handleFetch<DriveStatus>(`${API_BASE}/api/drive/status`, { cache: "no-store" } as RequestInit);
 }
 
 export async function saveDriveCredentials(clientId: string, clientSecret: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/drive/credentials`, {
+  await handleFetch<void>(`${API_BASE}/api/drive/credentials`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
-  });
-  if (!res.ok) throw await driveErr(res);
+  } as RequestInit);
 }
 
 export async function driveAuthUrl(): Promise<string> {
-  const res = await fetch(`${API_BASE}/api/drive/auth-url`, { cache: "no-store" });
-  if (!res.ok) throw await driveErr(res);
-  return (await res.json()).url as string;
+  const result = await handleFetch<{ url: string }>(`${API_BASE}/api/drive/auth-url`, { cache: "no-store" } as RequestInit);
+  return result.url;
 }
 
 export async function driveDisconnect(): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/drive/disconnect`, { method: "POST" });
-  if (!res.ok) throw await driveErr(res);
+  await handleFetch<void>(`${API_BASE}/api/drive/disconnect`, { method: "POST" } as RequestInit);
 }
 
 export async function driveListFiles(
@@ -298,9 +272,7 @@ export async function driveListFiles(
   if (folderId !== "root" || !shared) params.set("folder_id", folderId);
   if (pageToken) params.set("page_token", pageToken);
   if (shared) params.set("shared", "true");
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/drive/files?${params}`, { cache: "no-store" });
-  if (!res.ok) throw await driveErr(res);
-  return res.json();
+  return handleFetch<DriveFolder>(`${API_BASE}/api/projects/${projectId}/drive/files?${params}`, { cache: "no-store" } as RequestInit);
 }
 
 export async function driveImport(
@@ -308,13 +280,11 @@ export async function driveImport(
   fileIds: string[],
   folderIds: string[],
 ): Promise<ProjectState> {
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/drive/import`, {
+  return handleFetch<ProjectState>(`${API_BASE}/api/projects/${projectId}/drive/import`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ file_ids: fileIds, folder_ids: folderIds }),
-  });
-  if (!res.ok) throw await driveErr(res);
-  return res.json();
+  } as RequestInit);
 }
 
 export interface PipelineEvent {
@@ -358,13 +328,8 @@ export function isJobActive(job: Job | null | undefined): job is Job {
 }
 
 export async function submitRenderJob(projectId: string): Promise<Job> {
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/render?background=true`, { method: "POST" });
-  if (res.status === 409) throw new Error("Un job è già in corso per questo progetto");
-  if (!res.ok) {
-    const detail = await res.json().catch(() => null);
-    throw new Error(detail?.detail ?? `HTTP ${res.status}`);
-  }
-  return (await res.json()).job as Job;
+  const result = await handleFetch<{ job: Job }>(`${API_BASE}/api/projects/${projectId}/render?background=true`, { method: "POST" } as RequestInit);
+  return result.job;
 }
 
 export async function submitDriveImportJob(
@@ -372,23 +337,18 @@ export async function submitDriveImportJob(
   fileIds: string[],
   folderIds: string[],
 ): Promise<Job> {
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/drive/import?background=true`, {
+  const result = await handleFetch<{ job: Job }>(`${API_BASE}/api/projects/${projectId}/drive/import?background=true`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ file_ids: fileIds, folder_ids: folderIds }),
-  });
-  if (res.status === 409) throw new Error("Un import è già in corso per questo progetto");
-  if (!res.ok) throw await driveErr(res);
-  return (await res.json()).job as Job;
+  } as RequestInit);
+  return result.job;
 }
 
 export async function clearErrors(projectId: string): Promise<ProjectState> {
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/errors/clear`, { method: "POST" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  return handleFetch<ProjectState>(`${API_BASE}/api/projects/${projectId}/errors/clear`, { method: "POST" } as RequestInit);
 }
 
 export async function deleteProject(projectId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  await handleFetch<void>(`${API_BASE}/api/projects/${projectId}`, { method: "DELETE" } as RequestInit);
 }
