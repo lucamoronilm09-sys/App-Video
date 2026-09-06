@@ -91,13 +91,19 @@ def drive_disconnect() -> dict:
 
 @router.get("/projects/{project_id}/drive/files")
 def drive_files(project_id: str, folder_id: str = "root",
-                page_token: str | None = None, page_size: int = 100) -> dict:
+                page_token: str | None = None, page_size: int = 100,
+                shared: bool = False) -> dict:
     _get_state_or_404(project_id)
     try:
         service = dc.get_drive_service()
-        batch = dc.list_children(service, folder_id, page_token, page_size)
-        current = {"id": "root", "name": "Il mio Drive"} if folder_id == "root" \
-            else dc.get_file_meta(service, folder_id)
+        if shared:
+            # "Condivisi con me": ignora folder_id e usa list_shared_with_me
+            batch = dc.list_shared_with_me(service, page_token, page_size)
+            current = {"id": "shared", "name": "Condivisi con me"}
+        else:
+            batch = dc.list_children(service, folder_id, page_token, page_size)
+            current = {"id": "root", "name": "Il mio Drive"} if folder_id == "root" \
+                else dc.get_file_meta(service, folder_id)
     except Exception as exc:
         raise _drive_error(exc) from None
     return {"current": current, "entries": batch["entries"],

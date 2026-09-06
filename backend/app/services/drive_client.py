@@ -183,6 +183,24 @@ def list_children(service, folder_id: str = "root", page_token: str | None = Non
     return {"entries": entries, "nextPageToken": res.get("nextPageToken")}
 
 
+def list_shared_with_me(service, page_token: str | None = None,
+                        page_size: int = 100) -> dict[str, Any]:
+    """File e cartelle condivisi con l'utente: {entries: [{id,name,mimeType,is_folder}], nextPageToken}.
+    
+    Query: sharedWithMe=true and trashed=false. Stessi campi e ordinamento di list_children.
+    """
+    q = "sharedWithMe=true and trashed=false"
+    req = service.files().list(q=q, fields="nextPageToken,files(id,name,mimeType)",
+                               orderBy="folder,name", pageSize=max(1, min(page_size, 200)),
+                               pageToken=page_token)
+    res = req.execute()
+    entries = [{"id": f["id"], "name": f.get("name", "?"),
+                "mimeType": f.get("mimeType", ""),
+                "is_folder": f.get("mimeType") == FOLDER_MIME}
+               for f in res.get("files", [])]
+    return {"entries": entries, "nextPageToken": res.get("nextPageToken")}
+
+
 def get_file_meta(service, file_id: str) -> dict[str, Any]:
     res = service.files().get(fileId=file_id,
                               fields="id,name,mimeType").execute()

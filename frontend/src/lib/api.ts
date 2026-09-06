@@ -292,9 +292,12 @@ export async function driveListFiles(
   projectId: string,
   folderId = "root",
   pageToken?: string,
+  shared?: boolean,
 ): Promise<DriveFolder> {
-  const params = new URLSearchParams({ folder_id: folderId });
+  const params = new URLSearchParams();
+  if (folderId !== "root" || !shared) params.set("folder_id", folderId);
   if (pageToken) params.set("page_token", pageToken);
+  if (shared) params.set("shared", "true");
   const res = await fetch(`${API_BASE}/api/projects/${projectId}/drive/files?${params}`, { cache: "no-store" });
   if (!res.ok) throw await driveErr(res);
   return res.json();
